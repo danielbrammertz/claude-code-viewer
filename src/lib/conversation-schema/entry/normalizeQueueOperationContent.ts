@@ -15,6 +15,10 @@ type EnqueueContent = Extract<
 export const normalizeQueueOperationContent = (
   content: EnqueueContent,
 ): string => {
+  if (content === undefined) {
+    return "";
+  }
+
   // Legacy format: string
   if (typeof content === "string") {
     return content;

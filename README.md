@@ -1,3 +1,45 @@
+# Claude Code Viewer (ACPX Fork)
+
+> **This is a fork of [d-kimuson/claude-code-viewer](https://github.com/d-kimuson/claude-code-viewer)** with ACPX integration for the openclaw platform.
+
+## What This Fork Changes
+
+This fork replaces the direct Claude Code CLI invocation with **ACPX** (Agent Cloud Proxy) as the backend for sending messages. Instead of spawning `claude` directly, the viewer communicates through `acpx claude prompt` which manages Claude Code sessions in the openclaw container environment.
+
+### How It Works
+
+1. **Session Lookup**: When the user sends a message, the backend reads `~/.acpx/sessions/*.json` files to find the matching acpx session by `cwd` and `acp_session_id`.
+2. **ACPX Invocation**: The viewer spawns `acpx claude prompt "<message>" -s "<session-name>"` with the correct working directory. ACPX handles session management, authentication, and Claude Code communication internally.
+3. **State Machine via stdout**: The acpx process outputs human-readable progress on stdout. The viewer parses these signals to drive the session state machine:
+   - `[client] session/load` — session initialized, virtual conversation created
+   - First non-bracket text — assistant content started, triggers file-based refresh
+   - `[done]` — turn completed, session paused
+4. **Frontend Refresh**: The viewer's existing FileWatcher/SSE/TanStack Query pipeline reads the actual conversation data from Claude's JSONL files (`~/.claude/projects/`). The acpx daemon only emits events to trigger these refreshes — it does not parse or relay conversation content.
+
+### Key Differences from Upstream
+
+| Area | Upstream | This Fork |
+|------|----------|-----------|
+| CLI Backend | `claude` CLI directly | `acpx claude prompt` via ACPX |
+| Session Discovery | Creates sessions via Claude SDK | Looks up existing acpx sessions from `~/.acpx/sessions/` |
+| CLI Option | `--executable` | `--acpx-executable` (path to acpx binary) |
+| Message Format | JSON SDK protocol | Human-readable stdout parsing |
+| New Files | — | `AcpxSessionLookupService`, `AcpxSession` model |
+
+### CLI Usage
+
+```bash
+node dist/main.js --port 3400 --hostname 0.0.0.0 --acpx-executable /path/to/acpx
+```
+
+The `--acpx-executable` option (or `CCV_ACPX_EXECUTABLE_PATH` env var) specifies the path to the acpx binary. If not set, the viewer tries `which acpx` and falls back to `/app/extensions/acpx/node_modules/.bin/acpx`.
+
+---
+
+*Below is the original README from upstream.*
+
+---
+
 # Claude Code Viewer
 
 [![License](https://img.shields.io/github/license/d-kimuson/claude-code-viewer)](https://github.com/d-kimuson/claude-code-viewer/blob/main/LICENSE)

@@ -93,14 +93,14 @@ describe("QueueOperationEntrySchema", () => {
       expect(result.success).toBe(false);
     });
 
-    test("rejects missing content", () => {
+    test("accepts enqueue without content", () => {
       const result = QueueOperationEntrySchema.safeParse({
         type: "queue-operation",
         operation: "enqueue",
         timestamp: "2025-11-15T04:36:38.085Z",
         sessionId: "abc123",
       });
-      expect(result.success).toBe(false);
+      expect(result.success).toBe(true);
     });
   });
 

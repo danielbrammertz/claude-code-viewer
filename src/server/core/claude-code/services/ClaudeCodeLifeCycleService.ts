@@ -465,6 +465,30 @@ const LayerImpl = Effect.gen(function* () {
                   },
         });
 
+      // For resume/fork, create virtual conversation immediately so the user
+      // sees their message before acpx initializes
+      if (baseSession !== undefined) {
+        const virtualConversation = yield* Effect.promise(() =>
+          Runtime.runPromise(runtime)(
+            CCSessionProcess.createVirtualConversation(sessionProcess, {
+              sessionId: baseSession.sessionId,
+              userMessage: input.text,
+            }),
+          ),
+        );
+
+        yield* virtualConversationDatabase.createVirtualConversation(
+          projectId,
+          baseSession.sessionId,
+          [virtualConversation],
+        );
+
+        yield* eventBusService.emit("virtualConversationUpdated", {
+          projectId,
+          sessionId: baseSession.sessionId,
+        });
+      }
+
       const sessionInitializedPromise = controllablePromise<{
         sessionId: string;
       }>();

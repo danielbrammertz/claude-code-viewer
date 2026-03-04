@@ -1,7 +1,4 @@
-import type {
-  SDKMessage,
-  SDKUserMessage,
-} from "@anthropic-ai/claude-agent-sdk";
+import { spawn } from "node:child_process";
 import type { FileSystem, Path } from "@effect/platform";
 import type { CommandExecutor } from "@effect/platform/CommandExecutor";
 import { Context, Effect, Layer, Runtime } from "effect";
@@ -15,28 +12,19 @@ import type { EnvService } from "../../platform/services/EnvService";
 import { SessionRepository } from "../../session/infrastructure/SessionRepository";
 import { VirtualConversationDatabase } from "../../session/infrastructure/VirtualConversationDatabase";
 import type { SessionMetaService } from "../../session/services/SessionMetaService";
-import {
-  createMessageGenerator,
-  type UserMessageInput,
-} from "../functions/createMessageGenerator";
 import * as CCSessionProcess from "../models/CCSessionProcess";
 import * as ClaudeCode from "../models/ClaudeCode";
 import type * as CCTurn from "../models/ClaudeCodeTurn";
-import { ClaudeCodePermissionService } from "./ClaudeCodePermissionService";
+import type { UserMessageInput } from "../schema";
+import { AcpxSessionLookupService } from "./AcpxSessionLookupService";
 import { ClaudeCodeSessionProcessService } from "./ClaudeCodeSessionProcessService";
-
-export type MessageGenerator = () => AsyncGenerator<
-  SDKUserMessage,
-  void,
-  unknown
->;
 
 const LayerImpl = Effect.gen(function* () {
   const eventBusService = yield* EventBus;
   const sessionRepository = yield* SessionRepository;
   const sessionProcessService = yield* ClaudeCodeSessionProcessService;
   const virtualConversationDatabase = yield* VirtualConversationDatabase;
-  const permissionService = yield* ClaudeCodePermissionService;
+  const acpxSessionLookup = yield* AcpxSessionLookupService;
 
   const runtime = yield* Effect.runtime<
     | FileSystem.FileSystem
@@ -44,10 +32,299 @@ const LayerImpl = Effect.gen(function* () {
     | CommandExecutor
     | VirtualConversationDatabase
     | SessionMetaService
-    | ClaudeCodePermissionService
     | EnvService
     | CcvOptionsService
   >();
+
+  /**
+   * Spawn an acpx subprocess and drive the session state machine by parsing
+   * human-readable stdout for progress signals. The actual session content is
+   * read by the frontend from Claude's JSONL files — we just emit events to
+   * trigger refresh.
+   */
+  const createAcpxDaemon = (options: {
+    sessionProcess: CCSessionProcess.CCSessionProcessState;
+    task: CCTurn.AliveClaudeCodeTurnState;
+    prompt: string;
+    cwd: string;
+    claudeSessionId?: string;
+    sessionInitializedPromise: ReturnType<
+      typeof controllablePromise<{ sessionId: string }>
+    >;
+    sessionFileCreatedPromise: ReturnType<
+      typeof controllablePromise<{ sessionId: string }>
+    >;
+    projectId: string;
+  }) => {
+    const {
+      sessionProcess,
+      task,
+      prompt,
+      cwd,
+      claudeSessionId,
+      sessionInitializedPromise,
+      sessionFileCreatedPromise,
+      projectId,
+    } = options;
+
+    return async () => {
+      // Look up acpx session by cwd + acp_session_id
+      const acpxSessionResult = await Runtime.runPromise(runtime)(
+        Effect.either(acpxSessionLookup.findSession(cwd, claudeSessionId)),
+      );
+
+      if (acpxSessionResult._tag === "Left") {
+        const error = new Error(acpxSessionResult.left.message);
+        if (sessionInitializedPromise.status === "pending") {
+          sessionInitializedPromise.reject(error);
+        }
+        if (sessionFileCreatedPromise.status === "pending") {
+          sessionFileCreatedPromise.reject(error);
+        }
+        throw error;
+      }
+
+      const acpxSession = acpxSessionResult.right;
+      const sessionId = acpxSession.acp_session_id;
+
+      const { acpxExecutablePath } = await Runtime.runPromise(runtime)(
+        ClaudeCode.AcpxConfig,
+      );
+
+      // Transition to not_initialized immediately
+      await Runtime.runPromise(runtime)(
+        sessionProcessService.toNotInitializedState({
+          sessionProcessId: sessionProcess.def.sessionProcessId,
+          rawUserMessage: prompt,
+        }),
+      );
+
+      const args: string[] = ["claude", "prompt", prompt];
+
+      if (acpxSession.name !== undefined) {
+        args.push("-s", acpxSession.name);
+      }
+
+      let hasInitialized = false;
+      let hasReceivedContent = false;
+
+      // Spawn acpx subprocess
+      const child = spawn(acpxExecutablePath, args, {
+        stdio: ["ignore", "pipe", "pipe"],
+        signal: sessionProcess.def.abortController.signal,
+        cwd,
+      });
+
+      let buffer = "";
+
+      /**
+       * Parse human-readable stdout lines from `acpx claude prompt` to detect
+       * progress and drive the state machine. Example stdout:
+       *   [client] initialize (running)
+       *   [client] session/load (running)
+       *   <blank line>
+       *   Hello! How can I help you?
+       *   [done] end_turn
+       */
+      const processLine = async (line: string) => {
+        const trimmed = line.trim();
+        if (trimmed === "") return;
+
+        // Detect session loaded → session_initialized
+        if (!hasInitialized && trimmed.startsWith("[client] session/load")) {
+          hasInitialized = true;
+
+          await Runtime.runPromise(runtime)(
+            Effect.gen(function* () {
+              const processState =
+                yield* sessionProcessService.getSessionProcess(
+                  sessionProcess.def.sessionProcessId,
+                );
+
+              if (processState.type !== "not_initialized") return;
+
+              yield* sessionProcessService.toInitializedState({
+                sessionProcessId: sessionProcess.def.sessionProcessId,
+                initContext: { sessionId },
+              });
+
+              // Create virtual conversation
+              const virtualConversation =
+                yield* CCSessionProcess.createVirtualConversation(
+                  processState,
+                  {
+                    sessionId,
+                    userMessage: processState.rawUserMessage,
+                  },
+                );
+
+              if (processState.currentTask.def.type === "new") {
+                yield* virtualConversationDatabase.createVirtualConversation(
+                  projectId,
+                  sessionId,
+                  [virtualConversation],
+                );
+              } else if (processState.currentTask.def.type === "resume") {
+                const existingSession = yield* sessionRepository.getSession(
+                  processState.def.projectId,
+                  processState.currentTask.def.baseSessionId,
+                );
+
+                const copiedConversations =
+                  existingSession.session === null
+                    ? []
+                    : existingSession.session.conversations;
+
+                yield* virtualConversationDatabase.createVirtualConversation(
+                  processState.def.projectId,
+                  sessionId,
+                  [...copiedConversations, virtualConversation],
+                );
+              }
+
+              sessionInitializedPromise.resolve({ sessionId });
+
+              yield* eventBusService.emit("sessionListChanged", {
+                projectId: processState.def.projectId,
+              });
+
+              yield* eventBusService.emit("sessionChanged", {
+                projectId: processState.def.projectId,
+                sessionId,
+              });
+            }),
+          );
+          return;
+        }
+
+        // Detect first assistant content (non-bracket line after initialization)
+        if (hasInitialized && !hasReceivedContent && !trimmed.startsWith("[")) {
+          hasReceivedContent = true;
+
+          await Runtime.runPromise(runtime)(
+            Effect.gen(function* () {
+              const processState =
+                yield* sessionProcessService.getSessionProcess(
+                  sessionProcess.def.sessionProcessId,
+                );
+
+              if (processState.type !== "initialized") return;
+
+              yield* sessionProcessService.toFileCreatedState({
+                sessionProcessId: sessionProcess.def.sessionProcessId,
+              });
+
+              sessionFileCreatedPromise.resolve({ sessionId });
+
+              yield* eventBusService.emit("virtualConversationUpdated", {
+                projectId: processState.def.projectId,
+                sessionId,
+              });
+
+              yield* virtualConversationDatabase.deleteVirtualConversations(
+                sessionId,
+              );
+            }),
+          );
+          return;
+        }
+
+        // Detect turn completed
+        if (trimmed.startsWith("[done]")) {
+          await Runtime.runPromise(runtime)(
+            Effect.gen(function* () {
+              const processState =
+                yield* sessionProcessService.getSessionProcess(
+                  sessionProcess.def.sessionProcessId,
+                );
+
+              if (
+                processState.type === "file_created" ||
+                processState.type === "initialized"
+              ) {
+                yield* sessionProcessService.toPausedState({
+                  sessionProcessId: sessionProcess.def.sessionProcessId,
+                  sessionId,
+                });
+
+                yield* eventBusService.emit("sessionChanged", {
+                  projectId: processState.def.projectId,
+                  sessionId,
+                });
+              }
+            }),
+          );
+          return;
+        }
+
+        // For any other content line after initialization, emit sessionChanged
+        // to trigger frontend refresh from JSONL files
+        if (hasInitialized) {
+          await Runtime.runPromise(runtime)(
+            eventBusService.emit("sessionChanged", { projectId, sessionId }),
+          );
+        }
+      };
+
+      return new Promise<void>((resolve, reject) => {
+        child.stdout.on("data", (data: Buffer) => {
+          buffer += data.toString();
+
+          const lines = buffer.split("\n");
+          buffer = lines.pop() ?? "";
+
+          for (const line of lines) {
+            void processLine(line).catch((error) => {
+              Effect.runFork(
+                sessionProcessService.changeTurnState({
+                  sessionProcessId: sessionProcess.def.sessionProcessId,
+                  turnId: task.def.turnId,
+                  nextTask: {
+                    status: "failed",
+                    def: task.def,
+                    error,
+                  },
+                }),
+              );
+
+              if (sessionInitializedPromise.status === "pending") {
+                sessionInitializedPromise.reject(error);
+              }
+              if (sessionFileCreatedPromise.status === "pending") {
+                sessionFileCreatedPromise.reject(error);
+              }
+            });
+          }
+        });
+
+        child.stderr.on("data", (data: Buffer) => {
+          const text = data.toString().trim();
+          // Log stderr for debugging but don't fail
+          if (text !== "") {
+            console.error("[acpx stderr]", text);
+          }
+        });
+
+        child.on("error", (error) => {
+          if (sessionInitializedPromise.status === "pending") {
+            sessionInitializedPromise.reject(error);
+          }
+          if (sessionFileCreatedPromise.status === "pending") {
+            sessionFileCreatedPromise.reject(error);
+          }
+          reject(error);
+        });
+
+        child.on("close", (_code) => {
+          // Process any remaining buffered data
+          if (buffer.trim() !== "") {
+            void processLine(buffer).catch(() => {});
+          }
+          resolve();
+        });
+      });
+    };
+  };
 
   const continueSessionProcess = (options: {
     sessionProcessId: string;
@@ -80,14 +357,54 @@ const LayerImpl = Effect.gen(function* () {
         [virtualConversation],
       );
 
-      // Notify frontend that user message was added to virtual conversation
-      // This allows immediate display of the user's message before Claude responds
       yield* eventBusService.emit("virtualConversationUpdated", {
         projectId: sessionProcess.def.projectId,
         sessionId: baseSessionId,
       });
 
-      sessionProcess.def.setNextMessage(input);
+      // Spawn new acpx subprocess for this turn
+      const sessionInitializedPromise = controllablePromise<{
+        sessionId: string;
+      }>();
+      const sessionFileCreatedPromise = controllablePromise<{
+        sessionId: string;
+      }>();
+
+      const daemon = createAcpxDaemon({
+        sessionProcess,
+        task,
+        prompt: input.text,
+        cwd: sessionProcess.def.cwd,
+        claudeSessionId: baseSessionId,
+        sessionInitializedPromise,
+        sessionFileCreatedPromise,
+        projectId: sessionProcess.def.projectId,
+      });
+
+      void daemon()
+        .catch((error) => {
+          console.error("Error in continue daemon process", error);
+          if (sessionInitializedPromise.status === "pending") {
+            sessionInitializedPromise.reject(error);
+          }
+          if (sessionFileCreatedPromise.status === "pending") {
+            sessionFileCreatedPromise.reject(error);
+          }
+        })
+        .finally(() => {
+          Effect.runFork(
+            Effect.gen(function* () {
+              const currentProcess =
+                yield* sessionProcessService.getSessionProcess(
+                  sessionProcess.def.sessionProcessId,
+                );
+              yield* sessionProcessService.toCompletedState({
+                sessionProcessId: currentProcess.def.sessionProcessId,
+              });
+            }),
+          );
+        });
+
       return {
         sessionProcess,
         task,
@@ -112,23 +429,16 @@ const LayerImpl = Effect.gen(function* () {
         };
     ccOptions?: CCTurn.CCOptions;
   }) => {
-    const { projectId, cwd, input, userConfig, baseSession, ccOptions } =
-      options;
+    const { projectId, cwd, input, baseSession, ccOptions } = options;
 
     return Effect.gen(function* () {
-      const {
-        generateMessages,
-        setNextMessage,
-        setHooks: setMessageGeneratorHooks,
-      } = createMessageGenerator();
-
       const { sessionProcess, task } =
         yield* sessionProcessService.startSessionProcess({
           sessionDef: {
             projectId,
             cwd,
             abortController: new AbortController(),
-            setNextMessage,
+            setNextMessage: () => {},
             sessionProcessId: ulid(),
           },
           turnDef:
@@ -162,227 +472,22 @@ const LayerImpl = Effect.gen(function* () {
         sessionId: string;
       }>();
 
-      setMessageGeneratorHooks({
-        onNewUserMessageResolved: async (input) => {
-          Effect.runFork(
-            sessionProcessService.toNotInitializedState({
-              sessionProcessId: sessionProcess.def.sessionProcessId,
-              rawUserMessage: input.text,
-            }),
-          );
-        },
+      // For resume/fork, pass the base session's sessionId as claudeSessionId
+      const claudeSessionId =
+        baseSession !== undefined ? baseSession.sessionId : undefined;
+
+      const daemon = createAcpxDaemon({
+        sessionProcess,
+        task,
+        prompt: input.text,
+        cwd,
+        claudeSessionId,
+        sessionInitializedPromise,
+        sessionFileCreatedPromise,
+        projectId,
       });
 
-      const handleMessage = (message: SDKMessage) =>
-        Effect.gen(function* () {
-          const processState = yield* sessionProcessService.getSessionProcess(
-            sessionProcess.def.sessionProcessId,
-          );
-
-          // Check abort signal before processing message
-          if (sessionProcess.def.abortController.signal.aborted) {
-            return "break" as const;
-          }
-
-          if (processState.type === "completed") {
-            return "break" as const;
-          }
-
-          if (processState.type === "paused") {
-            // rule: paused 假定更新为 not_initialized
-            return yield* Effect.die(
-              new Error("Illegal state: paused is not expected"),
-            );
-          }
-
-          if (
-            message.type === "system" &&
-            message.subtype === "init" &&
-            processState.type === "not_initialized"
-          ) {
-            yield* sessionProcessService.toInitializedState({
-              sessionProcessId: processState.def.sessionProcessId,
-              initContext: {
-                initMessage: message,
-              },
-            });
-
-            // Virtual Conversation Creation
-            const virtualConversation =
-              yield* CCSessionProcess.createVirtualConversation(processState, {
-                sessionId: message.session_id,
-                userMessage: processState.rawUserMessage,
-              });
-
-            if (processState.currentTask.def.type === "new") {
-              // 末尾に追加するだけで OK
-              yield* virtualConversationDatabase.createVirtualConversation(
-                projectId,
-                message.session_id,
-                [virtualConversation],
-              );
-            } else if (processState.currentTask.def.type === "resume") {
-              const existingSession = yield* sessionRepository.getSession(
-                processState.def.projectId,
-                processState.currentTask.def.baseSessionId,
-              );
-
-              const copiedConversations =
-                existingSession.session === null
-                  ? []
-                  : existingSession.session.conversations;
-
-              yield* virtualConversationDatabase.createVirtualConversation(
-                processState.def.projectId,
-                message.session_id,
-                [...copiedConversations, virtualConversation],
-              );
-            } else {
-              // do nothing
-            }
-
-            sessionInitializedPromise.resolve({
-              sessionId: message.session_id,
-            });
-
-            yield* eventBusService.emit("sessionListChanged", {
-              projectId: processState.def.projectId,
-            });
-
-            yield* eventBusService.emit("sessionChanged", {
-              projectId: processState.def.projectId,
-              sessionId: message.session_id,
-            });
-
-            return "continue" as const;
-          }
-
-          if (
-            message.type === "assistant" &&
-            processState.type === "initialized"
-          ) {
-            yield* sessionProcessService.toFileCreatedState({
-              sessionProcessId: processState.def.sessionProcessId,
-            });
-
-            sessionFileCreatedPromise.resolve({
-              sessionId: message.session_id,
-            });
-
-            // Notify frontend that new assistant message is available
-            // This triggers before file watcher debounce, reducing perceived latency
-            yield* eventBusService.emit("virtualConversationUpdated", {
-              projectId: processState.def.projectId,
-              sessionId: message.session_id,
-            });
-
-            yield* virtualConversationDatabase.deleteVirtualConversations(
-              message.session_id,
-            );
-          }
-
-          if (message.type === "result") {
-            if (
-              processState.type === "file_created" ||
-              processState.type === "initialized"
-            ) {
-              yield* sessionProcessService.toPausedState({
-                sessionProcessId: processState.def.sessionProcessId,
-                resultMessage: message,
-              });
-
-              yield* eventBusService.emit("sessionChanged", {
-                projectId: processState.def.projectId,
-                sessionId: message.session_id,
-              });
-            }
-
-            return "continue" as const;
-          }
-
-          return "continue" as const;
-        });
-
-      const handleSessionProcessDaemon = async () => {
-        const messageIter = await Runtime.runPromise(runtime)(
-          Effect.gen(function* () {
-            const permissionOptions =
-              yield* permissionService.createCanUseToolRelatedOptions({
-                turnId: task.def.turnId,
-                userConfig,
-                sessionId: task.def.baseSessionId,
-              });
-
-            return yield* ClaudeCode.query(generateMessages(), {
-              ...(task.def.type === "continue" ? {} : task.def.ccOptions),
-              ...permissionOptions,
-              resume: task.def.baseSessionId,
-              cwd: sessionProcess.def.cwd,
-              abortController: sessionProcess.def.abortController,
-            });
-          }),
-        );
-
-        setNextMessage(input);
-
-        try {
-          for await (const message of messageIter) {
-            const result = await Runtime.runPromise(runtime)(
-              handleMessage(message),
-            ).catch((error) => {
-              // iter 自体が落ちてなければ継続したいので握りつぶす
-              Effect.runFork(
-                sessionProcessService.changeTurnState({
-                  sessionProcessId: sessionProcess.def.sessionProcessId,
-                  turnId: task.def.turnId,
-                  nextTask: {
-                    status: "failed",
-                    def: task.def,
-                    error: error,
-                  },
-                }),
-              );
-
-              if (sessionInitializedPromise.status === "pending") {
-                sessionInitializedPromise.reject(error);
-              }
-
-              if (sessionFileCreatedPromise.status === "pending") {
-                sessionFileCreatedPromise.reject(error);
-              }
-
-              return "continue" as const;
-            });
-
-            if (result === "break") {
-              break;
-            } else {
-            }
-          }
-        } catch (error) {
-          if (sessionInitializedPromise.status === "pending") {
-            sessionInitializedPromise.reject(error);
-          }
-
-          if (sessionFileCreatedPromise.status === "pending") {
-            sessionFileCreatedPromise.reject(error);
-          }
-
-          await Effect.runPromise(
-            sessionProcessService.changeTurnState({
-              sessionProcessId: sessionProcess.def.sessionProcessId,
-              turnId: task.def.turnId,
-              nextTask: {
-                status: "failed",
-                def: task.def,
-                error: error,
-              },
-            }),
-          );
-        }
-      };
-
-      const daemonPromise = handleSessionProcessDaemon()
+      const daemonPromise = daemon()
         .catch((error) => {
           console.error("Error occur in task daemon process", error);
           if (sessionInitializedPromise.status === "pending") {

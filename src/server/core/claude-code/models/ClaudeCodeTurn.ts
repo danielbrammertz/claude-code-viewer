@@ -1,21 +1,29 @@
-import type * as agentSdk from "@anthropic-ai/claude-agent-sdk";
+import type { SandboxSettings } from "../schema";
 
 type BaseClaudeCodeTurnDef = {
   turnId: string;
 };
 
-export type CCOptions = Pick<
-  agentSdk.Options,
-  | "disallowedTools"
-  | "settingSources"
-  | "systemPrompt"
-  | "model"
-  | "sandbox"
-  | "maxTurns"
-  | "maxThinkingTokens"
-  | "env"
-  | "maxBudgetUsd"
->;
+/**
+ * Standalone CCOptions type (previously derived from agentSdk.Options via Pick).
+ */
+export type CCOptions = {
+  disallowedTools?: string[];
+  settingSources?: Array<"user" | "project" | "local">;
+  systemPrompt?:
+    | string
+    | {
+        type: "preset";
+        preset: "claude_code";
+        append?: string;
+      };
+  model?: string;
+  sandbox?: SandboxSettings;
+  maxTurns?: number;
+  maxThinkingTokens?: number;
+  env?: Record<string, string | undefined>;
+  maxBudgetUsd?: number;
+};
 
 export type NewClaudeCodeTurnDef = BaseClaudeCodeTurnDef & {
   type: "new"; // new session

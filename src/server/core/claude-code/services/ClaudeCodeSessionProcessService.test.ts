@@ -1,7 +1,3 @@
-import type {
-  SDKResultMessage,
-  SDKSystemMessage,
-} from "@anthropic-ai/claude-agent-sdk";
 import { Effect } from "effect";
 import { describe, expect, it } from "vitest";
 import { testPlatformLayer } from "../../../../testing/layers/testPlatformLayer";
@@ -42,19 +38,8 @@ const createMockContinueTaskDef = (
 
 // Helper function to create mock init context
 const createMockInitContext = (sessionId: string): InitMessageContext => ({
-  initMessage: {
-    type: "system",
-    session_id: sessionId,
-  } as SDKSystemMessage,
+  sessionId,
 });
-
-// Helper function to create mock result message
-const createMockResultMessage = (sessionId: string): SDKResultMessage =>
-  ({
-    type: "result",
-    session_id: sessionId,
-    result: {},
-  }) as SDKResultMessage;
 
 describe("ClaudeCodeSessionProcessService", () => {
   describe("startSessionProcess", () => {
@@ -256,7 +241,7 @@ describe("ClaudeCodeSessionProcessService", () => {
 
         yield* service.toPausedState({
           sessionProcessId: "process-1",
-          resultMessage: createMockResultMessage("session-1"),
+          sessionId: "session-1",
         });
 
         // Continue the paused process
@@ -539,11 +524,9 @@ describe("ClaudeCodeSessionProcessService", () => {
           initContext: createMockInitContext("session-1"),
         });
 
-        const resultMessage = createMockResultMessage("session-1");
-
         const result = yield* service.toPausedState({
           sessionProcessId: "process-1",
-          resultMessage,
+          sessionId: "session-1",
         });
 
         return result;
@@ -586,11 +569,9 @@ describe("ClaudeCodeSessionProcessService", () => {
           sessionProcessId: "process-1",
         });
 
-        const resultMessage = createMockResultMessage("session-1");
-
         const result = yield* service.toPausedState({
           sessionProcessId: "process-1",
-          resultMessage,
+          sessionId: "session-1",
         });
 
         return result;
@@ -635,7 +616,7 @@ describe("ClaudeCodeSessionProcessService", () => {
 
         yield* service.toPausedState({
           sessionProcessId: "process-1",
-          resultMessage: createMockResultMessage("session-1"),
+          sessionId: "session-1",
         });
 
         const process = yield* service.getSessionProcess("process-1");
@@ -674,7 +655,7 @@ describe("ClaudeCodeSessionProcessService", () => {
         const result = yield* Effect.flip(
           service.toPausedState({
             sessionProcessId: "process-1",
-            resultMessage: createMockResultMessage("session-1"),
+            sessionId: "session-1",
           }),
         );
 
@@ -896,7 +877,7 @@ describe("ClaudeCodeSessionProcessService", () => {
 
         const pausedResult = yield* service.toPausedState({
           sessionProcessId: "process-1",
-          resultMessage: createMockResultMessage("session-1"),
+          sessionId: "session-1",
         });
         expect(pausedResult.sessionProcess.type).toBe("paused");
 
@@ -943,7 +924,7 @@ describe("ClaudeCodeSessionProcessService", () => {
 
         yield* service.toPausedState({
           sessionProcessId: "process-1",
-          resultMessage: createMockResultMessage("session-1"),
+          sessionId: "session-1",
         });
 
         // Continue with second task
@@ -975,7 +956,7 @@ describe("ClaudeCodeSessionProcessService", () => {
 
         const finalResult = yield* service.toPausedState({
           sessionProcessId: "process-1",
-          resultMessage: createMockResultMessage("session-1"),
+          sessionId: "session-1",
         });
 
         return finalResult;

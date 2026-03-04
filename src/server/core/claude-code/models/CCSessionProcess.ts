@@ -1,6 +1,6 @@
 import { Effect } from "effect";
 import type { UserEntry } from "../../../../lib/conversation-schema/entry/UserEntrySchema";
-import type { UserMessageInput } from "../functions/createMessageGenerator";
+import type { UserMessageInput } from "../schema";
 import type { InitMessageContext } from "../types";
 import * as ClaudeCode from "./ClaudeCode";
 import type * as CCTurn from "./ClaudeCodeTurn";
@@ -20,20 +20,20 @@ type CCSessionProcessStateBase = {
 };
 
 export type CCSessionProcessPendingState = CCSessionProcessStateBase & {
-  type: "pending" /* メッセージがまだ解決されていない状態 */;
+  type: "pending";
   sessionId?: undefined;
   currentTask: CCTurn.PendingClaudeCodeTurnState;
 };
 
 export type CCSessionProcessNotInitializedState = CCSessionProcessStateBase & {
-  type: "not_initialized" /* メッセージは解決されているが、init メッセージを未受信 */;
+  type: "not_initialized";
   sessionId?: undefined;
   currentTask: CCTurn.RunningClaudeCodeTurnState;
   rawUserMessage: string;
 };
 
 export type CCSessionProcessInitializedState = CCSessionProcessStateBase & {
-  type: "initialized" /* init メッセージを受信した状態 */;
+  type: "initialized";
   sessionId: string;
   currentTask: CCTurn.RunningClaudeCodeTurnState;
   rawUserMessage: string;
@@ -41,7 +41,7 @@ export type CCSessionProcessInitializedState = CCSessionProcessStateBase & {
 };
 
 export type CCSessionProcessFileCreatedState = CCSessionProcessStateBase & {
-  type: "file_created" /* ファイルが作成された状態 */;
+  type: "file_created";
   sessionId: string;
   currentTask: CCTurn.RunningClaudeCodeTurnState;
   rawUserMessage: string;
@@ -49,12 +49,12 @@ export type CCSessionProcessFileCreatedState = CCSessionProcessStateBase & {
 };
 
 export type CCSessionProcessPausedState = CCSessionProcessStateBase & {
-  type: "paused" /* タスクが完了し、次のタスクを受け付け可能 */;
+  type: "paused";
   sessionId: string;
 };
 
 export type CCSessionProcessCompletedState = CCSessionProcessStateBase & {
-  type: "completed" /* paused あるいは起動中のタスクが中断された状態。再開不可 */;
+  type: "completed";
   sessionId?: string | undefined;
 };
 

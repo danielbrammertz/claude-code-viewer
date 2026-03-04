@@ -1,15 +1,8 @@
-import * as agentSdk from "@anthropic-ai/claude-agent-sdk";
 import { Command, Path } from "@effect/platform";
 import { Data, Effect } from "effect";
 import { uniq } from "es-toolkit";
 import { CcvOptionsService } from "../../platform/services/CcvOptionsService";
 import * as ClaudeCodeVersion from "./ClaudeCodeVersion";
-
-type AgentSdkQuery = typeof agentSdk.query;
-type AgentSdkPrompt = Parameters<AgentSdkQuery>[0]["prompt"];
-type AgentSdkQueryOptions = NonNullable<
-  Parameters<AgentSdkQuery>[0]["options"]
->;
 
 const npxCacheRegExp = /_npx[/\\].*node_modules[\\/]\.bin/;
 const localNodeModulesBinRegExp = new RegExp(
@@ -30,12 +23,6 @@ export const claudeCodePathPriority = (path: string): number => {
 
 class ClaudeCodePathNotFoundError extends Data.TaggedError(
   "ClaudeCodePathNotFoundError",
-)<{
-  message: string;
-}> {}
-
-class ClaudeCodeAgentSdkNotSupportedError extends Data.TaggedError(
-  "ClaudeCodeAgentSdkNotSupportedError",
 )<{
   message: string;
 }> {}
@@ -93,6 +80,41 @@ const resolveClaudeCodePath = Effect.gen(function* () {
   return resolvedClaudePath;
 });
 
+const DEFAULT_ACPX_PATH = "/app/extensions/acpx/node_modules/.bin/acpx";
+
+const resolveAcpxPath = Effect.gen(function* () {
+  const path = yield* Path.Path;
+  const ccvOptionsService = yield* CcvOptionsService;
+
+  // CLI option / environment variable (highest priority)
+  const specifiedPath =
+    yield* ccvOptionsService.getCcvOptions("acpxExecutable");
+  if (specifiedPath !== undefined) {
+    return path.resolve(specifiedPath);
+  }
+
+  // System PATH lookup
+  const acpxPaths = yield* Command.string(
+    Command.make("which", "-a", "acpx").pipe(Command.runInShell(true)),
+  ).pipe(
+    Effect.map((output) =>
+      output
+        .split("\n")
+        .map((line) => line.trim())
+        .filter((line) => line !== ""),
+    ),
+    Effect.catchAll(() => Effect.succeed<string[]>([])),
+  );
+
+  const resolvedPath = acpxPaths.at(0);
+  if (resolvedPath !== undefined) {
+    return resolvedPath;
+  }
+
+  // Default path
+  return DEFAULT_ACPX_PATH;
+});
+
 export const Config = Effect.gen(function* () {
   const claudeCodeExecutablePath = yield* resolveClaudeCodePath;
 
@@ -103,6 +125,14 @@ export const Config = Effect.gen(function* () {
   return {
     claudeCodeExecutablePath,
     claudeCodeVersion,
+  };
+});
+
+export const AcpxConfig = Effect.gen(function* () {
+  const acpxExecutablePath = yield* resolveAcpxPath;
+
+  return {
+    acpxExecutablePath,
   };
 });
 
@@ -146,7 +176,7 @@ export const getAvailableFeatures = (
       ? ClaudeCodeVersion.greaterThanOrEqual(claudeCodeVersion, {
           major: 1,
           minor: 0,
-          patch: 125, // ClaudeCodeAgentSDK is available since v1.0.125
+          patch: 125,
         })
       : false,
   sidechainSeparation:
@@ -154,7 +184,7 @@ export const getAvailableFeatures = (
       ? ClaudeCodeVersion.greaterThanOrEqual(claudeCodeVersion, {
           major: 2,
           minor: 0,
-          patch: 28, // Sidechain conversations stored in agent-*.jsonl since v2.0.28
+          patch: 28,
         })
       : false,
   runSkillsDirectly:
@@ -172,51 +202,36 @@ export const getAvailableFeatures = (
       : false,
 });
 
-export const query = (
-  prompt: AgentSdkPrompt,
-  options: AgentSdkQueryOptions,
-) => {
-  const {
-    canUseTool,
-    permissionMode,
-    hooks,
-    systemPrompt,
-    settingSources,
-    ...baseOptions
-  } = options;
+/**
+ * Options for executing acpx claude.
+ */
+export type AcpxExecuteOptions = {
+  prompt: string;
+  cwd: string;
+  sessionName?: string;
+  abortController?: AbortController;
+};
 
-  return Effect.gen(function* () {
-    const { claudeCodeExecutablePath, claudeCodeVersion } = yield* Config;
-    const availableFeatures = getAvailableFeatures(claudeCodeVersion);
+/**
+ * Spawn `acpx claude prompt "<prompt>" --no-wait` and stream NDJSON lines.
+ * Each invocation is a NEW subprocess (acpx handles session continuity internally).
+ */
+export const execute = (options: AcpxExecuteOptions) =>
+  Effect.gen(function* () {
+    const { acpxExecutablePath } = yield* AcpxConfig;
 
-    const options: AgentSdkQueryOptions = {
-      ...baseOptions,
-      systemPrompt,
-      settingSources,
-      pathToClaudeCodeExecutable: claudeCodeExecutablePath,
-      disallowedTools: [
-        "AskUserQuestion",
-        ...(baseOptions.disallowedTools ?? []),
-      ], // Cannot answer from web interface instead of CLI
-      ...(availableFeatures.canUseTool
-        ? { canUseTool, permissionMode }
-        : {
-            permissionMode: "bypassPermissions",
-          }),
-    };
+    const args: string[] = ["claude", "prompt", options.prompt];
 
-    if (!availableFeatures.agentSdk) {
-      return yield* new ClaudeCodeAgentSdkNotSupportedError({
-        message: "Agent SDK is not supported in this version of Claude Code",
-      });
+    if (options.sessionName) {
+      args.push("-s", options.sessionName);
     }
 
-    return agentSdk.query({
-      prompt,
-      options: {
-        settingSources: ["user", "project", "local"],
-        ...options,
-      },
-    });
+    const command = Command.make(acpxExecutablePath, ...args);
+
+    return {
+      command,
+      acpxExecutablePath,
+      cwd: options.cwd,
+      abortController: options.abortController,
+    };
   });
-};

@@ -4,8 +4,8 @@ import type { ControllerResponse } from "../../../lib/effect/toEffectResponse";
 import type { InferEffect } from "../../../lib/effect/types";
 import { UserConfigService } from "../../platform/services/UserConfigService";
 import { ProjectRepository } from "../../project/infrastructure/ProjectRepository";
-import type { UserMessageInput } from "../functions/createMessageGenerator";
 import type * as CCTurn from "../models/ClaudeCodeTurn";
+import type { UserMessageInput } from "../schema";
 import { ClaudeCodeLifeCycleService } from "../services/ClaudeCodeLifeCycleService";
 
 const LayerImpl = Effect.gen(function* () {

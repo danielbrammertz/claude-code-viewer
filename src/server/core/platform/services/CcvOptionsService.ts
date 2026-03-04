@@ -6,6 +6,7 @@ export type CliOptions = {
   hostname: string;
   password?: string | undefined;
   executable?: string | undefined;
+  acpxExecutable?: string | undefined;
   claudeDir?: string | undefined;
   terminalDisabled?: boolean | undefined;
   terminalShell?: string | undefined;
@@ -18,6 +19,7 @@ export type CcvOptions = {
   hostname: string;
   password?: string | undefined;
   executable?: string | undefined;
+  acpxExecutable?: string | undefined;
   claudeDir?: string | undefined;
   terminalDisabled?: boolean | undefined;
   terminalShell?: string | undefined;
@@ -70,6 +72,10 @@ const LayerImpl = Effect.gen(function* () {
             (isFlagEnabled(getOptionalEnv("CCV_TERMINAL_UNRESTRICTED"))
               ? true
               : undefined),
+          acpxExecutable:
+            cliOptions.acpxExecutable ??
+            getOptionalEnv("CCV_ACPX_EXECUTABLE_PATH") ??
+            undefined,
           apiOnly:
             cliOptions.apiOnly ??
             (isFlagEnabled(getOptionalEnv("CCV_API_ONLY")) ? true : undefined),

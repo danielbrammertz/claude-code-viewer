@@ -83,7 +83,7 @@ export type SandboxSettings = z.infer<typeof sandboxSettingsSchema>;
 
 /**
  * Schema for Claude Code options (CCOptions)
- * Based on @anthropic-ai/claude-agent-sdk Options type
+ * Claude Code options schema
  */
 export const ccOptionsSchema = z.object({
   disallowedTools: z.array(z.string()).optional(),
@@ -107,3 +107,13 @@ export const ccOptionsSchema = z.object({
 });
 
 export type CCOptionsSchema = z.infer<typeof ccOptionsSchema>;
+
+/**
+ * Standalone user message input type.
+ * Previously lived in createMessageGenerator.ts and depended on SDK types.
+ */
+export type UserMessageInput = {
+  text: string;
+  images?: readonly ImageBlockParam[];
+  documents?: readonly DocumentBlockParam[];
+};

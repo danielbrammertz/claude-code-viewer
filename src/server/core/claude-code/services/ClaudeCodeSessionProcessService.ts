@@ -1,4 +1,3 @@
-import type { SDKResultMessage } from "@anthropic-ai/claude-agent-sdk";
 import { Context, Data, Effect, Layer, Ref } from "effect";
 import type { InferEffect } from "../../../lib/effect/types";
 import { EventBus } from "../../events/services/EventBus";
@@ -323,7 +322,7 @@ const LayerImpl = Effect.gen(function* () {
           def: currentProcess.def,
           tasks: currentProcess.tasks,
           currentTask: currentProcess.currentTask,
-          sessionId: initContext.initMessage.session_id,
+          sessionId: initContext.sessionId,
           rawUserMessage: currentProcess.rawUserMessage,
           initContext: initContext,
         },
@@ -371,9 +370,9 @@ const LayerImpl = Effect.gen(function* () {
 
   const toPausedState = (options: {
     sessionProcessId: string;
-    resultMessage: SDKResultMessage;
+    sessionId: string;
   }) => {
-    const { sessionProcessId, resultMessage } = options;
+    const { sessionProcessId, sessionId } = options;
 
     return Effect.gen(function* () {
       const currentProcess = yield* getSessionProcess(sessionProcessId);
@@ -395,7 +394,7 @@ const LayerImpl = Effect.gen(function* () {
         nextTask: {
           status: "completed",
           def: currentProcess.currentTask.def,
-          sessionId: resultMessage.session_id,
+          sessionId,
         },
       });
 

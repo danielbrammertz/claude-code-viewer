@@ -2,10 +2,10 @@ import { zValidator } from "@hono/zod-validator";
 import { Effect } from "effect";
 import { Hono } from "hono";
 import { z } from "zod";
-import type { UserMessageInput } from "../../core/claude-code/functions/createMessageGenerator";
 import { ClaudeCodeController } from "../../core/claude-code/presentation/ClaudeCodeController";
 import { ClaudeCodePermissionController } from "../../core/claude-code/presentation/ClaudeCodePermissionController";
 import { ClaudeCodeSessionProcessController } from "../../core/claude-code/presentation/ClaudeCodeSessionProcessController";
+import type { UserMessageInput } from "../../core/claude-code/schema";
 import {
   ccOptionsSchema,
   userMessageInputSchema,

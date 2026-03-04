@@ -9,6 +9,7 @@ import { AgentSessionController } from "./core/agent-session/presentation/AgentS
 import { ClaudeCodeController } from "./core/claude-code/presentation/ClaudeCodeController";
 import { ClaudeCodePermissionController } from "./core/claude-code/presentation/ClaudeCodePermissionController";
 import { ClaudeCodeSessionProcessController } from "./core/claude-code/presentation/ClaudeCodeSessionProcessController";
+import { AcpxSessionLookupService } from "./core/claude-code/services/AcpxSessionLookupService";
 import { ClaudeCodeLifeCycleService } from "./core/claude-code/services/ClaudeCodeLifeCycleService";
 import { ClaudeCodePermissionService } from "./core/claude-code/services/ClaudeCodePermissionService";
 import { ClaudeCodeService } from "./core/claude-code/services/ClaudeCodeService";
@@ -119,6 +120,7 @@ const InfraRepos = Layer.mergeAll(
 const InfraLayer = AgentSessionLayer.pipe(Layer.provideMerge(InfraRepos));
 
 const DomainBase = Layer.mergeAll(
+  AcpxSessionLookupService.Live,
   ClaudeCodePermissionService.Live,
   ClaudeCodeSessionProcessService.Live,
   ClaudeCodeService.Live,

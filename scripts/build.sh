@@ -9,3 +9,5 @@ fi
 pnpm lingui:compile
 pnpm build:frontend
 pnpm build:backend
+
+cp scripts/acpx-session-url.mjs dist/

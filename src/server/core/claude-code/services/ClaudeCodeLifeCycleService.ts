@@ -1,4 +1,4 @@
-import { spawn } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
 import type { FileSystem, Path } from "@effect/platform";
 import type { CommandExecutor } from "@effect/platform/CommandExecutor";
 import { Context, Effect, Layer, Runtime } from "effect";
@@ -68,10 +68,30 @@ const LayerImpl = Effect.gen(function* () {
     } = options;
 
     return async () => {
+      const { acpxExecutablePath } = await Runtime.runPromise(runtime)(
+        ClaudeCode.AcpxConfig,
+      );
+
       // Look up acpx session by cwd + acp_session_id
-      const acpxSessionResult = await Runtime.runPromise(runtime)(
+      let acpxSessionResult = await Runtime.runPromise(runtime)(
         Effect.either(acpxSessionLookup.findSession(cwd, claudeSessionId)),
       );
+
+      // Auto-create a session when none exists (e.g. after pod restart)
+      if (acpxSessionResult._tag === "Left" && claudeSessionId === undefined) {
+        await new Promise<void>((resolve, reject) => {
+          execFile(
+            acpxExecutablePath,
+            ["claude", "sessions", "ensure"],
+            { cwd },
+            (err) => (err ? reject(err) : resolve()),
+          );
+        });
+        // Re-read sessions after ensure
+        acpxSessionResult = await Runtime.runPromise(runtime)(
+          Effect.either(acpxSessionLookup.findSession(cwd, claudeSessionId)),
+        );
+      }
 
       if (acpxSessionResult._tag === "Left") {
         const error = new Error(acpxSessionResult.left.message);
@@ -86,10 +106,6 @@ const LayerImpl = Effect.gen(function* () {
 
       const acpxSession = acpxSessionResult.right;
       const sessionId = acpxSession.acp_session_id;
-
-      const { acpxExecutablePath } = await Runtime.runPromise(runtime)(
-        ClaudeCode.AcpxConfig,
-      );
 
       // Transition to not_initialized immediately
       await Runtime.runPromise(runtime)(

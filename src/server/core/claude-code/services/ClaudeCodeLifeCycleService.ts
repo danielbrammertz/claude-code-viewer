@@ -77,8 +77,10 @@ const LayerImpl = Effect.gen(function* () {
         Effect.either(acpxSessionLookup.findSession(cwd, claudeSessionId)),
       );
 
-      // Auto-create a session when none exists (e.g. after pod restart)
-      if (acpxSessionResult._tag === "Left" && claudeSessionId === undefined) {
+      // Auto-create a session when none exists (e.g. after pod restart).
+      // For resume/fork the original claudeSessionId won't match a newly
+      // created session, so re-search by cwd only after ensure.
+      if (acpxSessionResult._tag === "Left") {
         await new Promise<void>((resolve, reject) => {
           execFile(
             acpxExecutablePath,
@@ -87,9 +89,8 @@ const LayerImpl = Effect.gen(function* () {
             (err) => (err ? reject(err) : resolve()),
           );
         });
-        // Re-read sessions after ensure
         acpxSessionResult = await Runtime.runPromise(runtime)(
-          Effect.either(acpxSessionLookup.findSession(cwd, claudeSessionId)),
+          Effect.either(acpxSessionLookup.findSession(cwd)),
         );
       }
 

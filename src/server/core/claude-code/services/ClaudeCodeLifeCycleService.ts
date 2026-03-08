@@ -370,6 +370,11 @@ const LayerImpl = Effect.gen(function* () {
         sessionId: string;
       }>();
 
+      // Prevent Node.js unhandled rejection crash: the daemon may reject these
+      // promises before Effect.promise subscribes to them (microtask gap).
+      sessionInitializedPromise.promise.catch(() => {});
+      sessionFileCreatedPromise.promise.catch(() => {});
+
       const daemon = createAcpxDaemon({
         sessionProcess,
         task,
@@ -495,6 +500,11 @@ const LayerImpl = Effect.gen(function* () {
       const sessionFileCreatedPromise = controllablePromise<{
         sessionId: string;
       }>();
+
+      // Prevent Node.js unhandled rejection crash: the daemon may reject these
+      // promises before Effect.promise subscribes to them (microtask gap).
+      sessionInitializedPromise.promise.catch(() => {});
+      sessionFileCreatedPromise.promise.catch(() => {});
 
       // For resume/fork, pass the base session's sessionId as claudeSessionId
       const claudeSessionId =

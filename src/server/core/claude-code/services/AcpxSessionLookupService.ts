@@ -51,13 +51,14 @@ const LayerImpl = Effect.gen(function* () {
   const findSession = (
     cwd: string,
     claudeSessionId?: string,
+    options?: { includeClosed?: boolean },
   ): Effect.Effect<AcpxSession, AcpxSessionNotFoundError> =>
     Effect.gen(function* () {
       const sessions = yield* readAllSessions();
       const resolvedCwd = path.resolve(cwd);
 
       const match = sessions.find((s) => {
-        if (s.closed) return false;
+        if (!options?.includeClosed && s.closed) return false;
         if (s.cwd !== resolvedCwd) return false;
         if (
           claudeSessionId !== undefined &&
@@ -75,7 +76,7 @@ const LayerImpl = Effect.gen(function* () {
             : `cwd=${cwd}`;
         return yield* Effect.fail(
           new AcpxSessionNotFoundError({
-            message: `No open acpx session found for ${detail}`,
+            message: `No acpx session found for ${detail}`,
           }),
         );
       }
@@ -83,9 +84,24 @@ const LayerImpl = Effect.gen(function* () {
       return match;
     });
 
+  /**
+   * Reopen a closed acpx session by writing `closed: false` to its JSON file.
+   * This allows acpx CLI to find the session and reconnect via loadSession.
+   */
+  const reopenSession = (session: AcpxSession): Effect.Effect<void> =>
+    Effect.gen(function* () {
+      const filePath = path.join(sessionsDir, `${session.acpx_record_id}.json`);
+      const content = yield* fs.readFileString(filePath, "utf8");
+      const data = JSON.parse(content);
+      data.closed = false;
+      data.closed_at = undefined;
+      yield* fs.writeFileString(filePath, JSON.stringify(data, null, 2));
+    }).pipe(Effect.catchAll(() => Effect.void));
+
   return {
     readAllSessions,
     findSession,
+    reopenSession,
   };
 });
 

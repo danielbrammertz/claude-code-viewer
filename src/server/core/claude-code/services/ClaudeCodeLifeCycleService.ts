@@ -68,30 +68,73 @@ const LayerImpl = Effect.gen(function* () {
     } = options;
 
     return async () => {
+      // Transition to not_initialized immediately
+      await Runtime.runPromise(runtime)(
+        sessionProcessService.toNotInitializedState({
+          sessionProcessId: sessionProcess.def.sessionProcessId,
+          rawUserMessage: prompt,
+        }),
+      );
+
+      return runAcpxDaemon();
+    };
+
+    /**
+     * Use acpx for all session types. For resume/fork, acpx's
+     * connectAndLoadSession detects dead PIDs, respawns the agent, and
+     * calls loadSession(acpSessionId) to reload the JSONL — preserving
+     * Claude session identity through ACP.
+     */
+    async function runAcpxDaemon() {
       const { acpxExecutablePath } = await Runtime.runPromise(runtime)(
         ClaudeCode.AcpxConfig,
       );
 
-      // Look up acpx session by cwd + acp_session_id
+      // Look up acpx session with fallback strategy:
+      // 1. Exact match (cwd + claudeSessionId if resuming)
+      // 2. For resume: try closed sessions and reopen
+      // 3. Any open session for this cwd, or create new via ensure
       let acpxSessionResult = await Runtime.runPromise(runtime)(
         Effect.either(acpxSessionLookup.findSession(cwd, claudeSessionId)),
       );
 
-      // Auto-create a session when none exists (e.g. after pod restart).
-      // For resume/fork the original claudeSessionId won't match a newly
-      // created session, so re-search by cwd only after ensure.
-      if (acpxSessionResult._tag === "Left") {
-        await new Promise<void>((resolve, reject) => {
-          execFile(
-            acpxExecutablePath,
-            ["claude", "sessions", "ensure"],
-            { cwd },
-            (err) => (err ? reject(err) : resolve()),
-          );
-        });
-        acpxSessionResult = await Runtime.runPromise(runtime)(
-          Effect.either(acpxSessionLookup.findSession(cwd)),
+      // Fallback for resume: try closed sessions
+      if (acpxSessionResult._tag === "Left" && claudeSessionId !== undefined) {
+        const closedResult = await Runtime.runPromise(runtime)(
+          Effect.either(
+            acpxSessionLookup.findSession(cwd, claudeSessionId, {
+              includeClosed: true,
+            }),
+          ),
         );
+        if (closedResult._tag === "Right") {
+          await Runtime.runPromise(runtime)(
+            acpxSessionLookup.reopenSession(closedResult.right),
+          );
+          acpxSessionResult = closedResult;
+        }
+      }
+
+      // Fallback: any open session for this cwd, or create new
+      if (acpxSessionResult._tag === "Left") {
+        if (claudeSessionId !== undefined) {
+          acpxSessionResult = await Runtime.runPromise(runtime)(
+            Effect.either(acpxSessionLookup.findSession(cwd)),
+          );
+        }
+        if (acpxSessionResult._tag === "Left") {
+          await new Promise<void>((resolve, reject) => {
+            execFile(
+              acpxExecutablePath,
+              ["claude", "sessions", "ensure"],
+              { cwd },
+              (err) => (err ? reject(err) : resolve()),
+            );
+          });
+          acpxSessionResult = await Runtime.runPromise(runtime)(
+            Effect.either(acpxSessionLookup.findSession(cwd)),
+          );
+        }
       }
 
       if (acpxSessionResult._tag === "Left") {
@@ -108,16 +151,7 @@ const LayerImpl = Effect.gen(function* () {
       const acpxSession = acpxSessionResult.right;
       const sessionId = acpxSession.acp_session_id;
 
-      // Transition to not_initialized immediately
-      await Runtime.runPromise(runtime)(
-        sessionProcessService.toNotInitializedState({
-          sessionProcessId: sessionProcess.def.sessionProcessId,
-          rawUserMessage: prompt,
-        }),
-      );
-
       const args: string[] = ["claude", "prompt", prompt];
-
       if (acpxSession.name !== undefined) {
         args.push("-s", acpxSession.name);
       }
@@ -125,86 +159,65 @@ const LayerImpl = Effect.gen(function* () {
       let hasInitialized = false;
       let hasReceivedContent = false;
 
-      // Spawn acpx subprocess
       const child = spawn(acpxExecutablePath, args, {
         stdio: ["ignore", "pipe", "pipe"],
         signal: sessionProcess.def.abortController.signal,
         cwd,
       });
 
-      let buffer = "";
+      const buffer = "";
 
-      /**
-       * Parse human-readable stdout lines from `acpx claude prompt` to detect
-       * progress and drive the state machine. Example stdout:
-       *   [client] initialize (running)
-       *   [client] session/load (running)
-       *   <blank line>
-       *   Hello! How can I help you?
-       *   [done] end_turn
-       */
       const processLine = async (line: string) => {
         const trimmed = line.trim();
         if (trimmed === "") return;
 
-        // Detect session loaded → session_initialized
         if (!hasInitialized && trimmed.startsWith("[client] session/load")) {
           hasInitialized = true;
-
           await Runtime.runPromise(runtime)(
             Effect.gen(function* () {
               const processState =
                 yield* sessionProcessService.getSessionProcess(
                   sessionProcess.def.sessionProcessId,
                 );
-
               if (processState.type !== "not_initialized") return;
 
               yield* sessionProcessService.toInitializedState({
                 sessionProcessId: sessionProcess.def.sessionProcessId,
                 initContext: { sessionId },
               });
-
-              // Create virtual conversation
               const virtualConversation =
                 yield* CCSessionProcess.createVirtualConversation(
                   processState,
-                  {
-                    sessionId,
-                    userMessage: processState.rawUserMessage,
-                  },
+                  { sessionId, userMessage: processState.rawUserMessage },
                 );
 
-              if (processState.currentTask.def.type === "new") {
-                yield* virtualConversationDatabase.createVirtualConversation(
-                  projectId,
-                  sessionId,
-                  [virtualConversation],
-                );
-              } else if (processState.currentTask.def.type === "resume") {
+              // For resume: copy existing conversations and append new message
+              if (processState.currentTask.def.type === "resume") {
                 const existingSession = yield* sessionRepository.getSession(
                   processState.def.projectId,
                   processState.currentTask.def.baseSessionId,
                 );
-
                 const copiedConversations =
                   existingSession.session === null
                     ? []
                     : existingSession.session.conversations;
-
                 yield* virtualConversationDatabase.createVirtualConversation(
                   processState.def.projectId,
                   sessionId,
                   [...copiedConversations, virtualConversation],
                 );
+              } else {
+                yield* virtualConversationDatabase.createVirtualConversation(
+                  projectId,
+                  sessionId,
+                  [virtualConversation],
+                );
               }
 
               sessionInitializedPromise.resolve({ sessionId });
-
               yield* eventBusService.emit("sessionListChanged", {
                 projectId: processState.def.projectId,
               });
-
               yield* eventBusService.emit("sessionChanged", {
                 projectId: processState.def.projectId,
                 sessionId,
@@ -214,30 +227,23 @@ const LayerImpl = Effect.gen(function* () {
           return;
         }
 
-        // Detect first assistant content (non-bracket line after initialization)
         if (hasInitialized && !hasReceivedContent && !trimmed.startsWith("[")) {
           hasReceivedContent = true;
-
           await Runtime.runPromise(runtime)(
             Effect.gen(function* () {
               const processState =
                 yield* sessionProcessService.getSessionProcess(
                   sessionProcess.def.sessionProcessId,
                 );
-
               if (processState.type !== "initialized") return;
-
               yield* sessionProcessService.toFileCreatedState({
                 sessionProcessId: sessionProcess.def.sessionProcessId,
               });
-
               sessionFileCreatedPromise.resolve({ sessionId });
-
               yield* eventBusService.emit("virtualConversationUpdated", {
                 projectId: processState.def.projectId,
                 sessionId,
               });
-
               yield* virtualConversationDatabase.deleteVirtualConversations(
                 sessionId,
               );
@@ -246,7 +252,6 @@ const LayerImpl = Effect.gen(function* () {
           return;
         }
 
-        // Detect turn completed
         if (trimmed.startsWith("[done]")) {
           await Runtime.runPromise(runtime)(
             Effect.gen(function* () {
@@ -254,7 +259,6 @@ const LayerImpl = Effect.gen(function* () {
                 yield* sessionProcessService.getSessionProcess(
                   sessionProcess.def.sessionProcessId,
                 );
-
               if (
                 processState.type === "file_created" ||
                 processState.type === "initialized"
@@ -263,7 +267,6 @@ const LayerImpl = Effect.gen(function* () {
                   sessionProcessId: sessionProcess.def.sessionProcessId,
                   sessionId,
                 });
-
                 yield* eventBusService.emit("sessionChanged", {
                   projectId: processState.def.projectId,
                   sessionId,
@@ -274,8 +277,6 @@ const LayerImpl = Effect.gen(function* () {
           return;
         }
 
-        // For any other content line after initialization, emit sessionChanged
-        // to trigger frontend refresh from JSONL files
         if (hasInitialized) {
           await Runtime.runPromise(runtime)(
             eventBusService.emit("sessionChanged", { projectId, sessionId }),
@@ -283,15 +284,25 @@ const LayerImpl = Effect.gen(function* () {
         }
       };
 
-      return new Promise<void>((resolve, reject) => {
-        child.stdout.on("data", (data: Buffer) => {
-          buffer += data.toString();
+      return spawnAndParse(child, processLine, buffer);
+    }
 
+    /**
+     * Shared child-process stdout parser + lifecycle handling.
+     */
+    function spawnAndParse(
+      child: ReturnType<typeof spawn>,
+      lineHandler: (line: string) => Promise<void>,
+      buffer: string,
+    ) {
+      return new Promise<void>((resolve, reject) => {
+        child.stdout?.on("data", (data: Buffer) => {
+          buffer += data.toString();
           const lines = buffer.split("\n");
           buffer = lines.pop() ?? "";
 
           for (const line of lines) {
-            void processLine(line).catch((error) => {
+            void lineHandler(line).catch((error) => {
               Effect.runFork(
                 sessionProcessService.changeTurnState({
                   sessionProcessId: sessionProcess.def.sessionProcessId,
@@ -303,7 +314,6 @@ const LayerImpl = Effect.gen(function* () {
                   },
                 }),
               );
-
               if (sessionInitializedPromise.status === "pending") {
                 sessionInitializedPromise.reject(error);
               }
@@ -314,11 +324,10 @@ const LayerImpl = Effect.gen(function* () {
           }
         });
 
-        child.stderr.on("data", (data: Buffer) => {
+        child.stderr?.on("data", (data: Buffer) => {
           const text = data.toString().trim();
-          // Log stderr for debugging but don't fail
           if (text !== "") {
-            console.error("[acpx stderr]", text);
+            console.error("[daemon stderr]", text);
           }
         });
 
@@ -333,14 +342,13 @@ const LayerImpl = Effect.gen(function* () {
         });
 
         child.on("close", (_code) => {
-          // Process any remaining buffered data
           if (buffer.trim() !== "") {
-            void processLine(buffer).catch(() => {});
+            void lineHandler(buffer).catch(() => {});
           }
           resolve();
         });
       });
-    };
+    }
   };
 
   const continueSessionProcess = (options: {
@@ -420,9 +428,14 @@ const LayerImpl = Effect.gen(function* () {
                 yield* sessionProcessService.getSessionProcess(
                   sessionProcess.def.sessionProcessId,
                 );
-              yield* sessionProcessService.toCompletedState({
-                sessionProcessId: currentProcess.def.sessionProcessId,
-              });
+              // Only transition to completed on error/abort.
+              // Normal completion leaves the process in "paused" state
+              // so it remains available for continue messages.
+              if (currentProcess.type !== "paused") {
+                yield* sessionProcessService.toCompletedState({
+                  sessionProcessId: currentProcess.def.sessionProcessId,
+                });
+              }
             }),
           );
         });
@@ -556,9 +569,14 @@ const LayerImpl = Effect.gen(function* () {
                   sessionProcess.def.sessionProcessId,
                 );
 
-              yield* sessionProcessService.toCompletedState({
-                sessionProcessId: currentProcess.def.sessionProcessId,
-              });
+              // Only transition to completed on error/abort.
+              // Normal completion leaves the process in "paused" state
+              // so it remains available for continue messages.
+              if (currentProcess.type !== "paused") {
+                yield* sessionProcessService.toCompletedState({
+                  sessionProcessId: currentProcess.def.sessionProcessId,
+                });
+              }
             }),
           );
         });

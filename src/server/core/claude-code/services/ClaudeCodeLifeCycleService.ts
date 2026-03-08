@@ -520,7 +520,6 @@ const LayerImpl = Effect.gen(function* () {
           if (sessionFileCreatedPromise.status === "pending") {
             sessionFileCreatedPromise.reject(error);
           }
-          throw error;
         })
         .finally(() => {
           Effect.runFork(

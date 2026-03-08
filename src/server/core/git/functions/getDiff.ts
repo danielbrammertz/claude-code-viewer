@@ -172,7 +172,8 @@ async function getUntrackedFiles(cwd: string): Promise<GitResult<string[]>> {
     const untrackedFiles = parseLines(statusResult.data)
       .map((line) => stripAnsiColors(line)) // Remove ANSI color codes first
       .filter((line) => line.startsWith("??"))
-      .map((line) => line.slice(3));
+      .map((line) => line.slice(3))
+      .filter((entry) => !entry.endsWith("/"));
 
     return {
       success: true,

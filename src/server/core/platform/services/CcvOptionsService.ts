@@ -24,6 +24,7 @@ export type CcvOptions = {
   terminalUnrestricted?: boolean | undefined;
   apiOnly?: boolean | undefined;
   sessionScanRoots?: string[] | undefined;
+  projectPathTemplate?: string | undefined;
 };
 
 const getOptionalEnv = (key: string): string | undefined => {
@@ -74,6 +75,7 @@ const LayerImpl = Effect.gen(function* () {
           apiOnly:
             cliOptions.apiOnly ??
             (isFlagEnabled(getOptionalEnv("CCV_API_ONLY")) ? true : undefined),
+          projectPathTemplate: getOptionalEnv("CCV_PROJECT_PATH_TEMPLATE"),
           sessionScanRoots: (() => {
             const raw = getOptionalEnv("CCV_SESSION_SCAN_ROOTS");
             if (!raw) return undefined;

@@ -10,6 +10,7 @@ export const testProjectMetaServiceLayer = (options?: {
     meta = {
       projectName: null,
       projectPath: null,
+      rawProjectPath: null,
       sessionCount: 0,
     },
     invalidateProject = () => Effect.void,

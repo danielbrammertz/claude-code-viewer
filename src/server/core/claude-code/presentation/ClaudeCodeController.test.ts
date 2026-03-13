@@ -100,6 +100,7 @@ describe("ClaudeCodeController.getClaudeCommands", () => {
           meta: {
             projectName: "Test Project",
             projectPath: projectDir,
+            rawProjectPath: projectDir,
             sessionCount: 0,
           },
         },
@@ -203,6 +204,7 @@ describe("ClaudeCodeController.getClaudeCommands", () => {
           meta: {
             projectName: "Test Project",
             projectPath: projectDir,
+            rawProjectPath: projectDir,
             sessionCount: 0,
           },
         },
@@ -284,6 +286,7 @@ describe("ClaudeCodeController.getClaudeCommands", () => {
           meta: {
             projectName: "Test Project",
             projectPath: projectDir,
+            rawProjectPath: projectDir,
             sessionCount: 0,
           },
         },
@@ -344,6 +347,7 @@ describe("ClaudeCodeController.getClaudeCommands", () => {
           meta: {
             projectName: "Test Project",
             projectPath: projectDir,
+            rawProjectPath: projectDir,
             sessionCount: 0,
           },
         },
@@ -412,6 +416,7 @@ describe("ClaudeCodeController.getClaudeCommands", () => {
           meta: {
             projectName: "Test Project",
             projectPath: null, // No project path
+            rawProjectPath: null,
             sessionCount: 0,
           },
         },
@@ -497,6 +502,7 @@ describe("ClaudeCodeController.getClaudeCommands", () => {
           meta: {
             projectName: "Test Project",
             projectPath: projectDir,
+            rawProjectPath: projectDir,
             sessionCount: 0,
           },
         },
@@ -616,6 +622,7 @@ describe("ClaudeCodeController.getClaudeCommands", () => {
           meta: {
             projectName: "Test Project",
             projectPath: projectDir,
+            rawProjectPath: projectDir,
             sessionCount: 0,
           },
         },

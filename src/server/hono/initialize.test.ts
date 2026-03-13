@@ -35,6 +35,7 @@ const allDependencies = Layer.mergeAll(
     meta: {
       projectName: "Test Project",
       projectPath: "/path/to/project",
+      rawProjectPath: "/path/to/project",
       sessionCount: 0,
     },
   }),
@@ -73,6 +74,7 @@ describe("InitializeService", () => {
                   meta: {
                     projectName: "Project 1",
                     projectPath: "/path/to/project-1",
+                    rawProjectPath: "/path/to/project-1",
                     sessionCount: 2,
                   },
                 },

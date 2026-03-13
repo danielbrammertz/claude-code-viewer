@@ -9,6 +9,7 @@ export const testProjectRepositoryLayer = (options?: {
     meta: {
       projectName: string | null;
       projectPath: string | null;
+      rawProjectPath: string | null;
       sessionCount: number;
     };
   }>;

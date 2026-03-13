@@ -171,6 +171,7 @@ const LayerImpl = Effect.gen(function* () {
       const projectMeta: ProjectMeta = {
         projectName: resolvedPath ? path.basename(resolvedPath) : null,
         projectPath: resolvedPath,
+        rawProjectPath: projectPath,
         sessionCount: files.length,
       };
 

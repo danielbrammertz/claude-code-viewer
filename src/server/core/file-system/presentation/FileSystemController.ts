@@ -7,6 +7,34 @@ import { getDirectoryListing } from "../functions/getDirectoryListing";
 import { getFileCompletion } from "../functions/getFileCompletion";
 import { getFileContent } from "../functions/getFileContent";
 
+/**
+ * Rewrite an absolute file path from container-internal CWD space to the
+ * resolved host project path. For example:
+ *   filePath      = "/workspace/group/src/index.ts"
+ *   rawCwd        = "/workspace/group"
+ *   resolvedRoot  = "/home/node/nanoclaw/groups/telegram_daniel"
+ *   -> "src/index.ts"  (made relative so getFileContent resolves against resolvedRoot)
+ */
+const rewriteFilePath = (
+  filePath: string,
+  rawProjectPath: string | null,
+  projectPath: string,
+): string => {
+  if (!rawProjectPath || rawProjectPath === projectPath) return filePath;
+  if (!filePath.startsWith("/")) return filePath;
+
+  const rawPrefix = rawProjectPath.endsWith("/")
+    ? rawProjectPath
+    : `${rawProjectPath}/`;
+  if (filePath.startsWith(rawPrefix)) {
+    return filePath.slice(rawPrefix.length);
+  }
+  if (filePath === rawProjectPath) {
+    return ".";
+  }
+  return filePath;
+};
+
 const LayerImpl = Effect.gen(function* () {
   const projectRepository = yield* ProjectRepository;
 
@@ -27,10 +55,15 @@ const LayerImpl = Effect.gen(function* () {
       }
 
       const projectPath = project.meta.projectPath;
+      const rewrittenBasePath = rewriteFilePath(
+        basePath,
+        project.meta.rawProjectPath,
+        projectPath,
+      );
 
       try {
         const result = yield* Effect.promise(() =>
-          getFileCompletion(projectPath, basePath),
+          getFileCompletion(projectPath, rewrittenBasePath),
         );
         return {
           response: result,
@@ -103,9 +136,14 @@ const LayerImpl = Effect.gen(function* () {
       }
 
       const projectPath = project.meta.projectPath;
+      const rewrittenFilePath = rewriteFilePath(
+        filePath,
+        project.meta.rawProjectPath,
+        projectPath,
+      );
 
       const result = yield* Effect.promise(() =>
-        getFileContent(projectPath, filePath),
+        getFileContent(projectPath, rewrittenFilePath),
       );
 
       if (!result.success) {

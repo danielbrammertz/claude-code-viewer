@@ -19,6 +19,7 @@ describe("ProjectRepository", () => {
       const mockMeta: ProjectMeta = {
         projectName: "Test Project",
         projectPath: "/workspace",
+        rawProjectPath: "/workspace",
         sessionCount: 5,
       };
 
@@ -62,6 +63,7 @@ describe("ProjectRepository", () => {
       const mockMeta: ProjectMeta = {
         projectName: null,
         projectPath: null,
+        rawProjectPath: null,
         sessionCount: 0,
       };
 
@@ -103,6 +105,7 @@ describe("ProjectRepository", () => {
       const mockMeta: ProjectMeta = {
         projectName: null,
         projectPath: null,
+        rawProjectPath: null,
         sessionCount: 0,
       };
 

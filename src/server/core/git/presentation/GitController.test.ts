@@ -17,6 +17,7 @@ describe("GitController.commitFiles", () => {
           meta: {
             projectName: "Test Project",
             projectPath: null, // No project path
+            rawProjectPath: null,
             sessionCount: 0,
           },
         },
@@ -71,6 +72,7 @@ describe("GitController.pushCommits", () => {
           meta: {
             projectName: "Test Project",
             projectPath: null, // No project path
+            rawProjectPath: null,
             sessionCount: 0,
           },
         },

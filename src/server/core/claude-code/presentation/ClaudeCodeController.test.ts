@@ -115,6 +115,7 @@ describe("ClaudeCodeController.getClaudeCommands", () => {
           claudeSkillsDirPath: `${testDir}/skills`,
           claudeProjectsDirPath: `${testDir}/projects`,
         }),
+        allClaudeProjectsDirPaths: Effect.succeed([`${testDir}/projects`]),
       }),
     );
 
@@ -217,6 +218,7 @@ describe("ClaudeCodeController.getClaudeCommands", () => {
           claudeSkillsDirPath: `${testDir}/skills`,
           claudeProjectsDirPath: `${testDir}/projects`,
         }),
+        allClaudeProjectsDirPaths: Effect.succeed([`${testDir}/projects`]),
       }),
     );
 
@@ -297,6 +299,7 @@ describe("ClaudeCodeController.getClaudeCommands", () => {
           claudeSkillsDirPath: `${testDir}/skills`,
           claudeProjectsDirPath: `${testDir}/projects`,
         }),
+        allClaudeProjectsDirPaths: Effect.succeed([`${testDir}/projects`]),
       }),
     );
 
@@ -356,6 +359,7 @@ describe("ClaudeCodeController.getClaudeCommands", () => {
           claudeSkillsDirPath: `${testDir}/skills`,
           claudeProjectsDirPath: `${testDir}/projects`,
         }),
+        allClaudeProjectsDirPaths: Effect.succeed([`${testDir}/projects`]),
       }),
     );
 
@@ -423,6 +427,7 @@ describe("ClaudeCodeController.getClaudeCommands", () => {
           claudeSkillsDirPath: `${testDir}/skills`,
           claudeProjectsDirPath: `${testDir}/projects`,
         }),
+        allClaudeProjectsDirPaths: Effect.succeed([`${testDir}/projects`]),
       }),
     );
 
@@ -507,6 +512,7 @@ describe("ClaudeCodeController.getClaudeCommands", () => {
           claudeSkillsDirPath: `${testDir}/skills`,
           claudeProjectsDirPath: `${testDir}/projects`,
         }),
+        allClaudeProjectsDirPaths: Effect.succeed([`${testDir}/projects`]),
       }),
     );
 
@@ -625,6 +631,7 @@ describe("ClaudeCodeController.getClaudeCommands", () => {
           claudeSkillsDirPath: globalSkillsDir,
           claudeProjectsDirPath: `${testDir}/projects`,
         }),
+        allClaudeProjectsDirPaths: Effect.succeed([`${testDir}/projects`]),
       }),
     );
 

@@ -58,17 +58,14 @@ const LayerImpl = Effect.gen(function* () {
   const context = yield* ApplicationContext;
   const indexCacheRef = yield* Ref.make<IndexCache | null>(null);
 
-  const buildIndex = () =>
+  const indexProjectsDir = (claudeProjectsDirPath: string) =>
     Effect.gen(function* () {
-      const { claudeProjectsDirPath } = yield* context.claudeCodePaths;
-
       const dirExists = yield* fs.exists(claudeProjectsDirPath);
       if (!dirExists) {
-        return { index: createMiniSearchIndex(), documents: new Map() };
+        return [];
       }
 
       const projectEntries = yield* fs.readDirectory(claudeProjectsDirPath);
-      const miniSearch = createMiniSearchIndex();
 
       const documentEffects = projectEntries.map((projectEntry) =>
         Effect.gen(function* () {
@@ -154,14 +151,32 @@ const LayerImpl = Effect.gen(function* () {
       const allDocuments = yield* Effect.all(documentEffects, {
         concurrency: 10,
       });
-      const flatDocuments = allDocuments.flat();
+      return allDocuments.flat();
+    });
 
-      miniSearch.addAll(flatDocuments);
+  const buildIndex = () =>
+    Effect.gen(function* () {
+      const allDirs = yield* context.allClaudeProjectsDirPaths;
+      const miniSearch = createMiniSearchIndex();
 
+      const perDirDocs = yield* Effect.all(
+        allDirs.map((dir) => indexProjectsDir(dir)),
+        { concurrency: 10 },
+      );
+
+      // Deduplicate by document id (first occurrence wins)
       const documentsMap = new Map<string, SearchDocument>();
-      for (const doc of flatDocuments) {
-        documentsMap.set(doc.id, doc);
+      const uniqueDocs: SearchDocument[] = [];
+      for (const docs of perDirDocs) {
+        for (const doc of docs) {
+          if (!documentsMap.has(doc.id)) {
+            documentsMap.set(doc.id, doc);
+            uniqueDocs.push(doc);
+          }
+        }
       }
+
+      miniSearch.addAll(uniqueDocs);
 
       return { index: miniSearch, documents: documentsMap };
     });
@@ -182,13 +197,6 @@ const LayerImpl = Effect.gen(function* () {
 
   const search = (query: string, limit = 20, projectId?: string) =>
     Effect.gen(function* () {
-      const { claudeProjectsDirPath } = yield* context.claudeCodePaths;
-
-      const dirExists = yield* fs.exists(claudeProjectsDirPath);
-      if (!dirExists) {
-        return { results: [] as SearchResult[] };
-      }
-
       const { index: miniSearch, documents } = yield* getIndex();
 
       const searchResults = miniSearch.search(query).slice(0, limit * 2); // fetch extra to account for filtering

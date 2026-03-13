@@ -24,14 +24,18 @@ export const testPlatformLayer = (overrides?: {
   userConfig?: Partial<UserConfig>;
   ccvOptions?: Partial<CcvOptions>;
 }) => {
+  const projectsDirPath =
+    overrides?.claudeCodePaths?.claudeProjectsDirPath ??
+    resolve(claudeDirForTest, "projects");
   const applicationContextLayer = Layer.mock(ApplicationContext, {
     claudeCodePaths: Effect.succeed({
       globalClaudeDirectoryPath: resolve(claudeDirForTest),
       claudeCommandsDirPath: resolve(claudeDirForTest, "commands"),
       claudeSkillsDirPath: resolve(claudeDirForTest, "skills"),
-      claudeProjectsDirPath: resolve(claudeDirForTest, "projects"),
+      claudeProjectsDirPath: projectsDirPath,
       ...overrides?.claudeCodePaths,
     }),
+    allClaudeProjectsDirPaths: Effect.succeed([projectsDirPath]),
   });
 
   const ccvOptionsServiceLayer = Layer.mock(CcvOptionsService, {

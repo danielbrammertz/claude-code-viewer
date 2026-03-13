@@ -38,33 +38,19 @@ const LayerImpl = Effect.gen(function* () {
       };
     });
 
-  const getProjects = () =>
+  const scanProjectsDir = (claudeProjectsDirPath: string) =>
     Effect.gen(function* () {
-      // Check if the claude projects directory exists
-      const dirExists = yield* fs.exists(
-        (yield* context.claudeCodePaths).claudeProjectsDirPath,
-      );
+      const dirExists = yield* fs.exists(claudeProjectsDirPath);
       if (!dirExists) {
-        console.warn(
-          `Claude projects directory not found at ${(yield* context.claudeCodePaths).claudeProjectsDirPath}`,
-        );
-        return { projects: [] };
+        return [];
       }
 
-      // Read directory entries
-      const entries = yield* fs.readDirectory(
-        (yield* context.claudeCodePaths).claudeProjectsDirPath,
-      );
+      const entries = yield* fs.readDirectory(claudeProjectsDirPath);
 
-      // Filter directories and map to Project objects
       const projectEffects = entries.map((entry) =>
         Effect.gen(function* () {
-          const fullPath = path.resolve(
-            (yield* context.claudeCodePaths).claudeProjectsDirPath,
-            entry,
-          );
+          const fullPath = path.resolve(claudeProjectsDirPath, entry);
 
-          // Check if it's a directory
           const stat = yield* Effect.tryPromise(() =>
             fs.stat(fullPath).pipe(Effect.runPromise),
           ).pipe(Effect.catchAll(() => Effect.succeed(null)));
@@ -85,23 +71,42 @@ const LayerImpl = Effect.gen(function* () {
         }),
       );
 
-      // Execute all effects in parallel and filter out nulls
       const projectsWithNulls = yield* Effect.all(projectEffects, {
         concurrency: "unbounded",
       });
-      const projects = projectsWithNulls.filter(
-        (p): p is Project => p !== null,
+      return projectsWithNulls.filter((p): p is Project => p !== null);
+    });
+
+  const getProjects = () =>
+    Effect.gen(function* () {
+      const allDirs = yield* context.allClaudeProjectsDirPaths;
+
+      const perDirResults = yield* Effect.all(
+        allDirs.map((dir) => scanProjectsDir(dir)),
+        { concurrency: "unbounded" },
       );
 
+      // Merge and deduplicate by id (first occurrence wins)
+      const seen = new Set<string>();
+      const projects: Project[] = [];
+      for (const dirProjects of perDirResults) {
+        for (const project of dirProjects) {
+          if (!seen.has(project.id)) {
+            seen.add(project.id);
+            projects.push(project);
+          }
+        }
+      }
+
       // Sort by last modified date (newest first)
-      const sortedProjects = projects.sort((a, b) => {
+      projects.sort((a, b) => {
         return (
           (b.lastModifiedAt ? b.lastModifiedAt.getTime() : 0) -
           (a.lastModifiedAt ? a.lastModifiedAt.getTime() : 0)
         );
       });
 
-      return { projects: sortedProjects };
+      return { projects };
     });
 
   return {
